@@ -1,0 +1,15 @@
+langchain
+langgraph
+openai
+python-dotenv
+numpy
+pydantic
+huggingface_hub
+langchain_community
+transformers
+langchain
+langchain-core
+openai>=1.0.0
+langchain>=0.1.0
+pytest>=7.0.0
+pytest-cov>=4.0.0
