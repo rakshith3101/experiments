@@ -1,58 +1,51 @@
-name: Python CI with Azure DevOps Work Item Validation
+name: Python CI with Azure DevOps Work Item Link
 
 on:
-  push:
-    branches: [ "main" ]
   pull_request:
+    types: [opened, edited, synchronize, closed]
     branches: [ "main" ]
-    types: [opened, edited, synchronize]
 
 jobs:
   validate_work_item:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
 
     steps:
       - name: Check if work item is referenced in the PR description
         id: extract_work_item
         run: |
-          echo "Reading PR description from event payload..."
           PR_DESCRIPTION=$(jq -r '.pull_request.body' < "${GITHUB_EVENT_PATH}")
-          echo "Extracted PR Description: $PR_DESCRIPTION"
-
-          # Extract Azure DevOps work item ID (AB#123 format)
+          echo "PR Description: $PR_DESCRIPTION"
           WORK_ITEM_ID=$(echo "$PR_DESCRIPTION" | grep -oP 'AB#\K\d+' || echo "")
 
           if [ -z "$WORK_ITEM_ID" ]; then
-            echo "❌ No work item reference (AB#ID) found in PR description."
+            echo "❌ No work item reference found (expected format: AB#1234)."
             exit 1
           else
             echo "✅ Found Work Item ID: $WORK_ITEM_ID"
             echo "work_item_id=$WORK_ITEM_ID" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Validate the work item in Azure DevOps
-        id: validate_work_item
+      - name: Validate Work Item in Azure DevOps
+        id: validate
         env:
           WORK_ITEM_ID: ${{ steps.extract_work_item.outputs.work_item_id }}
           AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
         run: |
-          echo "Validating Azure DevOps Work Item: $WORK_ITEM_ID"
-
           RESPONSE=$(curl -s -u :$AZURE_DEVOPS_PAT \
-            "https://dev.azure.com/Aptean/AppCentral/_apis/wit/workitems/$WORK_ITEM_ID?api-version=6.0")
-
+            "https://dev.azure.com/Aptean/OneEAM/_apis/wit/workitems/$WORK_ITEM_ID?api-version=6.0")
           VALID_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
 
           if [ "$VALID_ID" = "$WORK_ITEM_ID" ]; then
-            echo "✅ Work item exists in Azure DevOps."
+            echo "✅ Work item exists: $WORK_ITEM_ID"
           else
-            echo "❌ Work item not found or invalid PAT/ID."
+            echo "❌ Work item not found or invalid response."
             exit 1
           fi
 
   test:
     needs: validate_work_item
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     steps:
@@ -79,3 +72,51 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
           fail_ci_if_error: false
+
+  attach_pr_to_workitem:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract Work Item and PR Info
+        id: extract
+        run: |
+          PR_BODY="${{ github.event.pull_request.body }}"
+          WORK_ITEM_ID=$(echo "$PR_BODY" | grep -oP 'AB#\K\d+' || echo "")
+          PR_URL="${{ github.event.pull_request.html_url }}"
+
+          if [ -z "$WORK_ITEM_ID" ]; then
+            echo "⚠️ No work item ID found. Skipping link."
+            exit 0
+          fi
+
+          echo "✅ Work Item: $WORK_ITEM_ID"
+          echo "✅ PR URL: $PR_URL"
+
+          echo "work_item_id=$WORK_ITEM_ID" >> $GITHUB_OUTPUT
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+
+      - name: Link PR to Work Item in Azure DevOps
+        env:
+          WORK_ITEM_ID: ${{ steps.extract.outputs.work_item_id }}
+          PR_URL: ${{ steps.extract.outputs.pr_url }}
+          AZURE_DEVOPS_PAT: ${{ secrets.AZURE_DEVOPS_PAT }}
+        run: |
+          echo "🔗 Linking PR to Azure DevOps Work Item..."
+          curl -X PATCH \
+            -u :$AZURE_DEVOPS_PAT \
+            -H "Content-Type: application/json-patch+json" \
+            -d "[
+              {
+                \"op\": \"add\",
+                \"path\": \"/relations/-\",
+                \"value\": {
+                  \"rel\": \"Hyperlink\",
+                  \"url\": \"$PR_URL\",
+                  \"attributes\": {
+                    \"comment\": \"Linked GitHub PR: $PR_URL\"
+                  }
+                }
+              }
+            ]" \
+            "https://dev.azure.com/Aptean/AppCentral/_apis/wit/workitems/$WORK_ITEM_ID?api-version=6.0"
