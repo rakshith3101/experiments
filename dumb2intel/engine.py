@@ -1,151 +1,154 @@
-# from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
-# from langchain.llms import HuggingFacePipeline
-# from langchain.prompts import PromptTemplate
-# from langchain.chains import LLMChain
-
-# # Load model and tokenizer locally (flan-t5 is good at instruction-following)
-# model_name = "google/flan-t5-base"
-
-# tokenizer = AutoTokenizer.from_pretrained(model_name)
-# model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-
-# pipe = pipeline(
-#     "text2text-generation",
-#     model=model,
-#     tokenizer=tokenizer,
-#     max_new_tokens=64,
-#     temperature=0.2
-# )
-
-# llm = HuggingFacePipeline(pipeline=pipe)
-
-# # Define prompt template
-# template = """
-# You are a navigation assistant.
-# The car is on a {grid_size} grid. Each move is 1 unit.
-# Allowed directions: up, down, left, right.
-
-# Start: {start}
-# End: {end}
-
-# Give the shortest path from start to end as a Python list of directions.
-# Example format: ["right", "right", "down"]
-# Directions:
-# """
-
-# prompt = PromptTemplate(
-#     input_variables=["start", "end", "grid_size"],
-#     template=template.strip()
-# )
-
-# # LLM chain
-# llm_chain = LLMChain(prompt=prompt, llm=llm)
-
-# # Helper function
-# def get_llm_directions(start, end, grid_size="5x5"):
-#     response = llm_chain.run({"start": start, "end": end, "grid_size": grid_size})
-#     try:
-#         directions_start = response.find("[")
-#         directions = response[directions_start:].split("]")[0] + "]"
-#         moves = eval(directions)
-#         if isinstance(moves, list):
-#             return moves
-#     except Exception as e:
-#         print("Failed to parse directions:", e)
-#     return []
-
-# # Example usage
-# start = (0, 0)
-# end = (3, 2)
-# directions = get_llm_directions(start, end)
-# print("LLM Directions:", directions)
-
-
-# from openai import OpenAI
-
-# def query_hf_api(payload):
-#     """Send a query to the OpenRouter API using the OpenAI client."""
-#     try:
-#         client = OpenAI(
-#             base_url="https://openrouter.ai/api/v1",
-#             api_key="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",
-#         )
-        
-#         # Extract the prompt from the payload (assuming it's in the 'inputs' field for compatibility)
-#         prompt = payload.get('inputs', '') if isinstance(payload, dict) else str(payload)
-        
-#         completion = client.chat.completions.create(
-#             model="meta-llama/llama-4-maverick:free",
-#             messages=[{
-#                 "role": "user",
-#                 "content": prompt
-#             }]
-#         )
-        
-#         # Return the response in a similar format to the HF API for compatibility
-#         return [{"generated_text": completion.choices[0].message.content.strip()}]
-        
-#     except Exception as e:
-#         print(f"Error calling OpenRouter API: {str(e)}")
-#         # Return empty response in case of error
-#         return [{"generated_text": "Error: Failed to generate response"}]
-
-# # Define the text generation function using the query function
-# def generate_text(prompt):
-#     response = query_hf_api({"inputs": prompt})
-    
-#     # Print the raw response to inspect its structure
-#     print(response)
-    
-#     # Safely access the response, handling errors
-#     if isinstance(response, list) and len(response) > 0:
-#         return response[0].get('generated_text', "No text generated.")
-#     else:
-#         return "Error: Unable to generate text."
-
-# # Example usage
-# generated_text = generate_text("Hello, how are you?")
-# print("Generated Text:", generated_text)
-
-
-
-# langchain implementation
-
 from langchain.prompts import PromptTemplate
+
+import re
+import ast
+import os
+
+def extract_directions(response_text):
+    try:
+        # Look for the 'Directions: [...]' pattern in the response
+        match = re.search(r'Directions:\s*(\[[^\]]+\])', response_text)
+        if match:
+            direction_list = match.group(1)
+            return ast.literal_eval(direction_list)  # Safely parse the list
+    except Exception as e:
+        print("❌ Failed to parse directions:", e)
+
+    print("⚠️ No valid direction list found.")
+    return []
 
 # Your OpenRouter-based LLM call
 def generate_text(prompt: str) -> str:
     from openai import OpenAI
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key="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",  # Replace with your key
-    )
+        api_key=os.getenv("OPENROUTER_API_KEY"),  # Replace with your key
+    ) #make this model dumb
     completion = client.chat.completions.create(
-        model="meta-llama/llama-4-maverick:free",
+        model="mistralai/mistral-small-3.2-24b-instruct:free",
         messages=[{"role": "user", "content": prompt}],
+        temperature=0.6,
     )
     return completion.choices[0].message.content.strip()
 
 
 # Use LangChain PromptTemplate for dynamic formatting
+from langchain.prompts import PromptTemplate
+from gridWorld import GridWorld
+# Grid setup
+obstacles = [(1, 0), (1, 1),]
+env = GridWorld(width=3, height=3, start=(0, 0), end=(2, 2), obstacles=obstacles)
+
+# Prompt preparation
 template = PromptTemplate(
-    input_variables=["start", "end", "grid_size"],
-    template="""
-You are a navigation assistant.
+    input_variables=["start", "end", "grid_size","obstacles"],
+    template="""You are a navigation assistant.
 The car is on a {grid_size} grid. Each move is 1 unit.
 Allowed directions: up, down, left, right.
 
 Start: {start}
 End: {end}
 
-Give the shortest path from start to end as a Python list of directions.
+There are obstacles on the grid at these positions: {obstacles}
+
+Provide the shortest path avoiding the obstacles as a Python list.
 Example format: ["right", "right", "down"]
-Directions:
+
+Always provide the answer in the following format: 
+
+Directions: ["right", "right", "down"] # have the directions placeholder while returning.
 """.strip()
 )
 
-# Format the prompt using LangChain, then send it manually
-formatted_prompt = template.format(start=(0, 0), end=(2, 3), grid_size="5x5")
-response = generate_text(formatted_prompt)
+# Format prompt with obstacles
+formatted_prompt = template.format(
+    start=env.start,
+    end=env.end,
+    grid_size=f"{env.width}x{env.height}",
+    obstacles=obstacles
+)
 
-print("Generated Directions:", response)
+MAX_ATTEMPTS = 10
+MIN_ACCEPTABLE_REWARD = 80
+
+from rewardFunction import evaluate_path_with_reward
+def improve_with_feedback(env, initial_prompt, obstacles):
+    current_prompt = initial_prompt
+    best_directions = []
+    best_reward = float("-inf")
+    reward_history = []
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        print(f"\n🧠 Attempt {attempt}: Asking LLM for directions...")
+        response = generate_text(current_prompt)
+        print("🤖 LLM Response:\n", response)
+
+        directions = extract_directions(response)
+        print("✅ Parsed Directions:", directions)
+
+        reward = evaluate_path_with_reward(env, directions)
+        print(f"🏁 Reward Score: {reward}")
+
+        reward_history.append(reward)
+        if reward > best_reward:
+            best_reward = reward
+            best_directions = directions
+
+        # Exit early if reward is acceptable
+        if reward >= MIN_ACCEPTABLE_REWARD:
+            print("🎯 Acceptable path found.")
+            break
+
+        # Generate feedback and update the prompt
+        feedback = f"""
+Your previous path was: {directions}
+This path received a reward score of {reward} on a {env.width}x{env.height} grid with obstacles at: {obstacles}
+
+Please revise the path to avoid obstacles and reach the goal more efficiently.
+Format your answer as:
+Directions: ["right", "right", ...]
+"""
+        current_prompt = initial_prompt + "\n\n" + feedback.strip()
+
+    return best_directions, best_reward, reward_history
+
+# Reward Function Method
+#final_directions, final_reward, reward_history = improve_with_feedback(env, formatted_prompt, obstacles)
+# print(f"\n✅ Final Path: {final_directions}")
+# print(f"🎯 Final Reward: {final_reward}")
+# env.render()
+
+
+
+
+
+# LLM as Judge method
+from llmJudge import judge_best_path_with_llm
+
+NUM_ATTEMPTS = 5
+candidate_paths = []
+
+for i in range(NUM_ATTEMPTS):
+    print(f"\n🧠 LLM Attempt {i+1}")
+    response = generate_text(formatted_prompt)
+    print("🤖 LLM Output:", response)
+
+    directions = extract_directions(response)
+    if directions:
+        candidate_paths.append(directions)
+
+
+# Let the LLM be the judge
+final_path = judge_best_path_with_llm(
+    candidates=candidate_paths,
+    grid_size=f"{env.width}x{env.height}",
+    obstacles=obstacles,
+    start=env.start,
+    end=env.end
+)
+
+env.reset()
+for move in final_path:
+    env.move(move)
+
+env.render()
+print(f"🏁 Final Chosen Path: {final_path}")
