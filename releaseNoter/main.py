@@ -10,7 +10,7 @@ from openai import OpenAI
 def generate_framed_notes(notes: str):
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key="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",
+        api_key=os.getenv(OPEN_ROUETER_KEY),
     )
 
     prompt = f"""
