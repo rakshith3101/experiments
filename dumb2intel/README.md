@@ -88,11 +88,11 @@ python grpo.py
 🤖 LLM Response: Directions: ["right", "right", "down", "down"]
 ...
 🏁 GRPO Complete. Final Best Path:
-✅ Directions: ['right', 'right', 'down']
+✅ Directions: ['right', 'right', 'down','down']
 
 🗺️ Current Grid:
 S o o 
-X X . 
+X X o 
 . . E 
 ```
 
